@@ -9,7 +9,7 @@ router.get(/^\/([^\\/]+?)(?:\/(?=$))?$/i, function (req, res, next) {
     var Server = "127.0.0.1:11211";
     var options = {};
     var memcached = new Memcached(Server, options);
-    memcached.set("r", numHosts, 0, function () {
+    memcached.set("h", numHosts, 0, function () {
         console.log("done set rate (per sec)");
     });
 

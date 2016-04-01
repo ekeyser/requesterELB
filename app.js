@@ -8,6 +8,9 @@ var bodyParser = require('body-parser');
 var routes = require('./routes/index');
 var requestrate = require('./routes/requestrate');
 var numhosts = require('./routes/numhosts');
+var Memcached = require('memcached');
+var request = require('request');
+var NanoTimer = require('nanotimer');
 
 var app = express();
 
@@ -39,7 +42,7 @@ app.use(function (req, res, next) {
 // development error handler
 // will print stacktrace
 if (app.get('env') === 'development') {
-    app.use(function (err, req, res, next) {
+    app.use(function (err, req, res) {
         res.status(err.status || 500);
         res.render('error', {
             message: err.message,
@@ -50,7 +53,7 @@ if (app.get('env') === 'development') {
 
 // production error handler
 // no stacktraces leaked to user
-app.use(function (err, req, res, next) {
+app.use(function (err, req, res) {
     res.status(err.status || 500);
     res.render('error', {
         message: err.message,
@@ -62,7 +65,9 @@ app.use(function (err, req, res, next) {
 module.exports = app;
 
 
-var Memcached = require('memcached');
+/*
+ initialize beginning values
+ */
 var Server = "127.0.0.1:11211";
 var options = {};
 var memcached = new Memcached(Server, options);
@@ -71,78 +76,71 @@ memcached.set("h", 1, 0, function () {
     // console.log("done set number hosts");
 });
 
-memcached.set("r", 2, 0, function () {
+memcached.set("r", 1, 0, function () {
     // console.log("done set rate (per sec)");
 });
 
 
-var memCacheCheckInterval = 2000;
-
 /*
-  cylce every x ms to check memcache to calculate
-  request rate which is based on global requests that
-  should be made incorporating how many checking hosts
-  that exist to spread those checks out with
+ cylce every x ms to check memcache to calculate
+ request rate which is based on global requests that
+ should be made incorporating how many checking hosts
+ that exist to spread those checks out with
  */
-setInterval(function () {
-    // console.log("checking num hosts");
-    var numHosts;
+/*
+ * what's the interval? (1/rate) * host-count
+ */
+var memCacheCheckInterval = "2s";
+var numHosts;
+var globalReqRate;
+var localReqRate;
+
+
+var checkCache = function (timer) {
     memcached.get("h", function (err, data) {
         numHosts = data;
-        // console.log("numHosts is " + numHosts);
-        calcRR();
-    });
+        memcached.get("r", function (err, data) {
+            globalReqRate = data;
 
-    // console.log("checking req rate");
-    var globalReqRate;
-    memcached.get("r", function (err, data) {
-        // console.log(err);
-        // console.log(data);
-        globalReqRate = data;
-        // console.log("globalReqRate is " + globalReqRate);
-        calcRR();
-    });
-    
-    
-    /*
-     * what's the interval? (1/rate) * host-count
-     */
-    var localReqRate;
-    function calcRR() {
-        // console.log("calculating RR");
-        if (globalReqRate != null) {
-            // console.log("globalReqRate not null");
-            if (numHosts != null) {
-                // console.log("numHosts not null");
-                localReqRate = numHosts / globalReqRate * 1000;
-                // console.log(localReqRate);
+            /*
+             now calculate resulting local req rate
+             */
+            if (globalReqRate != null && numHosts != null) {
+                localReqRate = numHosts / globalReqRate * 1000 + "m";
+            } else {
+                console.log("cannot calculate localReqRate");
             }
-        }
-        
-        if (localReqRate != null) {
-            makeRequests(localReqRate);
-        }
-    };
-    
-    
-}, memCacheCheckInterval);
 
-var reqIntervalHandle;
-
-
-function makeRequests(currInterval) {
-    if (reqIntervalHandle != null) {
-        clearInterval(reqIntervalHandle);
-    }
-    reqIntervalHandle = setInterval(function () {
-        var request = require('request');
-        request('http://localhost:9000/', function (error, response, body) {
-            console.log("request made");
-            // console.log(error);
-            // console.log(response);
-            // console.log(body);
+            timer.clearInterval();
+            makeRequests(timer);
         });
-    }, currInterval);
+    });
 };
 
 
+var requester = function () {
+    console.log(Date.now() + " making request");
+    request('http://localhost:9000/', function (error, response, body) {
+    });
+};
+
+
+var makeRequests = function (timer) {
+    if (localReqRate != null) {
+        timer.setInterval(requester, '', localReqRate);
+    }
+};
+
+
+var begin = function (timerR, timerC) {
+    timerC.setInterval(function () {
+        timerR.clearInterval();
+        checkCache(timerR);
+    }, '', memCacheCheckInterval);
+};
+
+
+var timerCacheCheck = new NanoTimer();
+var timerRequester = new NanoTimer();
+
+begin(timerRequester, timerCacheCheck);
